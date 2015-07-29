@@ -175,7 +175,7 @@ class ePuck():
         """
 
         if self.debug:
-            print >> sys.stderr, '\033[31m[ePuck]:\033[0m ', ' '.join([str(e) for e in txt])
+            print >> sys.stderr, '\033[31m[ePuck'+str(self.address)+']:\033[0m ', ' '.join([str(e) for e in txt])
 
         return 0
 
@@ -332,12 +332,21 @@ class ePuck():
             self._debug('Sending binary message: ', ','.join('%s' % i for i in parameters))
             message = struct.pack(">bb", - ord(parameters[0]), 0)
             self._send(message)
-            reply = self._recv()
-            while len(reply) < parameters[1]:
-                reply += self._recv()
-            reply = struct.unpack(parameters[2], reply)
+            reply = ()
+            try:
+                reply = self._recv()
+                while len(reply) < parameters[1]:
+                    reply += self._recv()
+                self._debug('Binary message recived: ', reply)
+                reply = struct.unpack(parameters[2], reply) # "reply" must contain the exact number of bytes requested by the format in "paramaters[2]".
 
-            self._debug('Binary message recived: ', reply)
+            except Exception, e:
+                if str(e) == "Bluetooth communication problem: timed out":
+                    self._debug("Received " + str(len(reply)) + " of " + str(parameters[1]) + " bytes")
+                    return 0
+                else:
+                    raise e
+
             return reply
 
         # Read differents sensors
@@ -361,10 +370,10 @@ class ePuck():
                 reply = send_binary_mode(parameters)
                 if type(reply) is tuple and type(reply[0]) is int:
                     self._proximity = reply
-
+                    #print("prox: " + str(reply[0]) + ", " + str(reply[1]) + ", " + str(reply[2]) + ", " + str(reply[3]) + ", " + str(reply[4]) + ", " + str(reply[5]) + ", " + str(reply[6]) + ", " + str(reply[7]))
             elif s == 'm':
                 # Floor sensors
-                parameters = ('M', 6, '@HHH')
+                parameters = ('M', 10, '@HHHHH')
                 reply = send_binary_mode(parameters)
                 if type(reply) is tuple and type(reply[0]) is int:
                     self._floor_sensors = reply
@@ -445,6 +454,8 @@ class ePuck():
         self._debug("Connected")
 
         self.reset()
+        self.clean_recv_buffer()
+
         return True
 
     def disconnect(self):
@@ -980,4 +991,34 @@ class ePuck():
         if self._cam_enable and time.time() - self.timestamp > 1:
             self._read_image()
             self.timestamp = time.time()
+
+
+    def clean_recv_buffer(self):
+        """
+        Clean the receiving buffer on connection in order to be sure the next commands answers are
+        received well.
+
+        :return: Successful operation
+        :rtype: Boolean
+        """
+
+        # Request the current protocol version and read until no more characters are received;
+        # do not take in consideration the answer since it can be wrong.
+        message = "v\n"
+        bytes = self._send(message)
+        self._debug('Message sent:', repr(message))
+        self._debug('Bytes sent:', bytes)
+        reply = self._recv()
+        self._debug('Message received: ', reply)
+        try:
+            while len(reply) > 0:
+                reply = self._recv()
+                self._debug('Message received: ', reply)
+        except Exception, e:
+            if str(e) == "Bluetooth communication problem: timed out":
+                self._debug('Communication timeout, buffer cleaned')
+            else:
+                raise e
+
+        return True
 
