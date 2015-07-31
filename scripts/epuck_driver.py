@@ -4,17 +4,17 @@
 import rospy
 import numpy as np
 from cv_bridge.core import CvBridge
-from geometry_msgs.msg import Twist
-from sensor_msgs.msg import Image
 from epuck.ePuck import ePuck
 from sensor_msgs.msg import Range
 from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Image
+from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Point, Quaternion
+from nav_msgs.msg import Odometry
+from visualization_msgs.msg import Marker
 import math
 import tf
-from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Point, Quaternion
 import time
-from visualization_msgs.msg import Marker
 
 
 ## Camera parameters
