@@ -132,7 +132,7 @@ class EPuckDriver(object):
 
         if self.enabled_sensors['proximity']:
             for i in range(0,8):
-                self.prox_publisher.append(rospy.Publisher("proximty"+str(i), Range))
+                self.prox_publisher.append(rospy.Publisher("proximity"+str(i), Range))
                 self.prox_msg.append(Range())
                 self.prox_msg[i].radiation_type = Range.INFRARED
                 self.prox_msg[i].header.frame_id =  self._name+"/base_prox" + str(i)
@@ -162,12 +162,13 @@ class EPuckDriver(object):
             self.floor_publisher = rospy.Publisher('floor', Marker)
 
         # Spin almost forever
-        rate = rospy.Rate(7)   # 7 Hz. If you experience "timeout" problems with multiple robots try to reduce this value.
+        #rate = rospy.Rate(7)   # 7 Hz. If you experience "timeout" problems with multiple robots try to reduce this value.
         self.startTime = time.time()
         while not rospy.is_shutdown():
             self._bridge.step()
             self.update_sensors()
-            rate.sleep()
+            #rate.sleep()	# Do not call "sleep" otherwise the bluetooth communication will hang.
+                            # We communicate as fast as possible, this shouldn't be a problem...
 
     def update_sensors(self):
         # print "accelerometer:", self._bridge.get_accelerometer()
