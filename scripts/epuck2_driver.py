@@ -4,10 +4,11 @@
 import rospy
 import numpy as np
 from cv_bridge.core import CvBridge
-from epuck.ePuck import ePuck
+from epuck.ePuck2 import ePuck2
 from sensor_msgs.msg import Range
 from sensor_msgs.msg import Imu
 from sensor_msgs.msg import Image
+from sensor_msgs.msg import ChannelFloat32
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Point, Quaternion
 from nav_msgs.msg import Odometry
@@ -18,10 +19,10 @@ import time
 
 
 ## Camera parameters
-IMAGE_FORMAT = 'RGB_365'
+IMAGE_FORMAT = 'RGB_565'
 CAMERA_ZOOM = 8
 
-## Epuck dimensions
+## e-puck2 dimensions
 # Wheel Radio (cm)
 WHEEL_DIAMETER = 4
 # Separation between wheels (cm)
@@ -36,19 +37,19 @@ MOT_STEP_DIST = (WHEEL_CIRCUMFERENCE/1000.0)    # 0.000125 meters per step (m/st
 
 # available sensors
 sensors = ['accelerometer', 'proximity', 'motor_position', 'light',
-           'floor', 'camera', 'selector', 'motor_speed', 'microphone']
+           'floor', 'camera', 'selector', 'motor_speed', 'microphone', 'distance_sensor']
 
 
-class EPuckDriver(object):
+class EPuck2Driver(object):
     """
 
-    :param epuck_name:
-    :param epuck_address:
+    :param epuck2_name:
+    :param epuck2_address:
     """
 
-    def __init__(self, epuck_name, epuck_address, init_xpos, init_ypos, init_theta):
-        self._bridge = ePuck(epuck_address, False)
-        self._name = epuck_name
+    def __init__(self, epuck2_name, epuck2_address, init_xpos, init_ypos, init_theta):
+        self._bridge = ePuck2(epuck2_address, False)
+        self._name = epuck2_name
 
         self.enabled_sensors = {s: None for s in sensors}
 
@@ -86,7 +87,7 @@ class EPuckDriver(object):
 
     def setup_sensors(self):
         """
-        Enable epuck sensors based on the parameters.
+        Enable epuck2 sensors based on the parameters.
         By default, all sensors are false.
 
         """
@@ -108,7 +109,7 @@ class EPuckDriver(object):
             #self._bridge.calibrate_proximity_sensors()
 
     def run(self):
-        # Connect to the ePuck
+        # Connect to the ePuck2
         self._bridge.connect()
 
         # Setup the necessary sensors.
@@ -121,18 +122,21 @@ class EPuckDriver(object):
 
         self._bridge.step()
 
-        # Subscribe to Commando Velocity Topic
+        # Subscribe to Command Velocity Topic
         rospy.Subscriber("mobile_base/cmd_vel", Twist, self.handler_velocity)
+
+		# Subscribe to RGB topic
+        rospy.Subscriber("rgb_values", ChannelFloat32, self.handler_rgb)
 
         # Sensor Publishers
         # rospy.Publisher("/%s/mobile_base/" % self._name, )
 
         if self.enabled_sensors['camera']:
-            self.image_publisher = rospy.Publisher("camera", Image)
+            self.image_publisher = rospy.Publisher("camera", Image, queue_size=1)
 
         if self.enabled_sensors['proximity']:
             for i in range(0,8):
-                self.prox_publisher.append(rospy.Publisher("proximity"+str(i), Range))
+                self.prox_publisher.append(rospy.Publisher("proximity"+str(i), Range, queue_size=1))
                 self.prox_msg.append(Range())
                 self.prox_msg[i].radiation_type = Range.INFRARED
                 self.prox_msg[i].header.frame_id =  self._name+"/base_prox" + str(i)
@@ -141,25 +145,34 @@ class EPuckDriver(object):
                 self.prox_msg[i].max_range = 0.05		# 5 cm
 
         if self.enabled_sensors['motor_position']:
-            self.odom_publisher = rospy.Publisher('odom', Odometry)
+            self.odom_publisher = rospy.Publisher('odom', Odometry, queue_size=1)
 
         if self.enabled_sensors['accelerometer']:
-            self.accel_publisher = rospy.Publisher('accel', Imu)    # Only "linear_acceleration" vector filled.
+            self.accel_publisher = rospy.Publisher('accel', Imu, queue_size=1)    # Only "linear_acceleration" vector filled.
 
         if self.enabled_sensors['selector']:
-            self.selector_publisher = rospy.Publisher('selector', Marker)
+            self.selector_publisher = rospy.Publisher('selector', Marker, queue_size=1)
 
         if self.enabled_sensors['light']:
-            self.light_publisher = rospy.Publisher('light', Marker)
+            self.light_publisher = rospy.Publisher('light', Marker, queue_size=1)
 
         if self.enabled_sensors['motor_speed']:
-            self.motor_speed_publisher = rospy.Publisher('motor_speed', Marker)
+            self.motor_speed_publisher = rospy.Publisher('motor_speed', Marker, queue_size=1)
 
         if self.enabled_sensors['microphone']:
-            self.microphone_publisher = rospy.Publisher('microphone', Marker)
+            self.microphone_publisher = rospy.Publisher('microphone', Marker, queue_size=1)
 
         if self.enabled_sensors['floor']:
-            self.floor_publisher = rospy.Publisher('floor', Marker)
+            self.floor_publisher = rospy.Publisher('floor', Marker, queue_size=1)
+
+        if self.enabled_sensors['distance_sensor']:
+			self.distance_sensor_publisher = rospy.Publisher("dist_sens", Range, queue_size=1)
+			self.distance_sensor_msg = Range()
+			self.distance_sensor_msg.radiation_type = Range.INFRARED
+			self.distance_sensor_msg.header.frame_id =  self._name+"/base_dist_sens"
+			self.distance_sensor_msg.field_of_view = 0.43 	# About 25 degrees (+/- 12.5)
+			self.distance_sensor_msg.min_range = 0.005	# 5 mm
+			self.distance_sensor_msg.max_range = 2		# 2 m
 
         # Spin almost forever
         #rate = rospy.Rate(7)   # 7 Hz. If you experience "timeout" problems with multiple robots try to reduce this value.
@@ -390,6 +403,15 @@ class EPuckDriver(object):
             microphone_marker_msg.text = "microphone: " + str(mic)
             self.microphone_publisher.publish(microphone_marker_msg)
 
+        if self.enabled_sensors['distance_sensor']:
+			self.distance_sensor_msg.range = self._bridge.get_distance_sensor()[0]/1000.0
+			if self.distance_sensor_msg.range > self.distance_sensor_msg.max_range:
+				self.distance_sensor_msg.range = self.distance_sensor_msg.max_range
+			if self.distance_sensor_msg.range < self.distance_sensor_msg.min_range:
+				self.distance_sensor_msg.range = self.distance_sensor_msg.min_range
+			self.distance_sensor_msg.header.stamp = rospy.Time.now()
+			self.distance_sensor_publisher.publish(self.distance_sensor_msg)
+			self.br.sendTransform((0.035, 0, 0.034), tf.transformations.quaternion_from_euler(0, -0.21, 0), rospy.Time.now(), self._name+"/base_dist_sens", self._name+"/base_link")
 
     def handler_velocity(self, data):
         """
@@ -408,18 +430,26 @@ class EPuckDriver(object):
         right_vel = wr * 1000.
         self._bridge.set_motors_speed(left_vel, right_vel)
 
+    def handler_rgb(self, data):
+        """
+        Set the RGB LEDs color based on data received.
+        :param data: r,g,b values for each LEDs in sequence
+        """
+        #print(data)
+        self._bridge.set_rgb_leds(data.values[0],data.values[1],data.values[2], data.values[3],data.values[4],data.values[5], data.values[6],data.values[7],data.values[8], data.values[9],data.values[10],data.values[11])
+
 
 def run():
-    rospy.init_node("epuck_drive", anonymous=True)
+    rospy.init_node("epuck2_drive", anonymous=True)
 
-    epuck_address = rospy.get_param("~epuck_address")
-    epuck_name = rospy.get_param("~epuck_name", "epuck")
+    epuck2_address = rospy.get_param("~epuck2_address")
+    epuck2_name = rospy.get_param("~epuck2_name", "epuck2")
     init_xpos = rospy.get_param("~xpos", 0.0)
     init_ypos = rospy.get_param("~ypos", 0.0)
     init_theta = rospy.get_param("~theta", 0.0)
     #print "init x, y, th: " + str(init_xpos) + ", " + str(init_ypos) + ", " + str(init_theta)
 
-    EPuckDriver(epuck_name, epuck_address, init_xpos, init_ypos, init_theta).run()
+    EPuck2Driver(epuck2_name, epuck2_address, init_xpos, init_ypos, init_theta).run()
 
 
 if __name__ == "__main__":

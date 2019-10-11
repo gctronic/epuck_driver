@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-# ePuck.py
+# ePuck2.py
 #
 # Copyright 2010 Manuel Martín Ortiz <mmartinortiz@gmail.com>
 #
@@ -20,11 +20,11 @@
 #       Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
 #       MA 02110-1301, USA.
 #
-#		-- ePuck.py --
+#		-- ePuck2.py --
 #
 #		The aim of this library is to provide access to the ePuck robots
 #		through a bluetooth connection. Thus, you can write a program that
-#		read from the ePuck's sensors and write in their actuators, This
+#		read from the ePuck2's sensors and write in their actuators, This
 #		will allow us to create advanced programs that can develop a wide
 #		variety of complex tasks. It is necesary that the ePuck has installed
 #		the Webot's fimware 1.4.2 or 1.4.3. You can find this fantastic
@@ -39,7 +39,7 @@
 #
 #		In this package you will find some examples of how to use this library.
 #
-#		You may expetience some problems when you work with your ePuck, We
+#		You may expetience some problems when you work with your ePuck2, We
 #		recommend you take into consideration the following special
 #		characteristic: we use a bluetooth communciation, therefore our bandwith
 #		is limited and we cannot expect to do too many tasks in short
@@ -47,7 +47,7 @@
 #		to make a quick process of the images, you will know what I'm saying.
 #		So remember, you are processing in your computer, not on the ePuck,
 #		and you need to take the sensors data and write on the actuators
-#		values on the ePuck
+#		values on the ePuck2
 #
 #		For further information and updates visit http://abitworld.com/projects
 
@@ -57,7 +57,7 @@ import time  # Used for image capture process
 import struct  # Used for Big-Endian messages
 import Image  # Used for the pictures of the camera
 
-__package__ = "ePuck"
+__package__ = "ePuck2"
 __docformat__ = "restructuredtext"
 
 """
@@ -90,14 +90,15 @@ DIC_SENSORS = {
     "proximity": "n",
     "light": "o",
     "motor_position": "q",
-    "microphone": "u"
+    "microphone": 0x0C, #"u",
+    "distance_sensor": 0x0D
 }
 
 # You have to use the keys of this dictionary for indicate the operating
 # mode of the camera
 CAM_MODE = {
     "GREY_SCALE": 0,
-    "RGB_365": 1,
+    "RGB_565": 1,
     "YUV": 2,
     "LINEAR_CAM": 3
 }
@@ -106,9 +107,9 @@ CAM_MODE = {
 CAM_ZOOM = (1, 4, 8)
 
 
-class ePuck():
+class ePuck2():
     """
-    This class represent an ePuck object
+    This class represent an ePuck2 object
     """
 
     def __init__(self, address, debug=False):
@@ -120,7 +121,7 @@ class ePuck():
         :param 	debug: If you want more verbose information, useful for debugging
         :type	debug: Boolean
 
-        :return: ePuck object
+        :return: ePuck2 object
         """
 
         # Monitoring Variables
@@ -156,11 +157,13 @@ class ePuck():
         self._floor_sensors = (0, 0, 0)
         self._proximity = (0, 0, 0, 0, 0, 0, 0, 0)
         self._light_sensor = (0, 0, 0, 0, 0, 0, 0, 0)
-        self._microphone = (0, 0, 0)
+        self._microphone = (0, 0, 0, 0)
         self._pil_image = None
+	self._distance_sensor = (0)
 
         # Leds
         self._leds_status = [False] * 10
+	self._rgb_leds = (0,0,0, 0,0,0, 0,0,0, 0,0,0)
 
     #
     # Private methods
@@ -175,7 +178,7 @@ class ePuck():
         """
 
         if self.debug:
-            print >> sys.stderr, '\033[31m[ePuck'+str(self.address)+']:\033[0m ', ' '.join([str(e) for e in txt])
+            print >> sys.stderr, '\033[31m[ePuck2'+str(self.address)+']:\033[0m ', ' '.join([str(e) for e in txt])
 
         return 0
 
@@ -301,6 +304,12 @@ class ePuck():
                 n = self._send(msg)
                 self._debug('Binary message sent of [' + str(n) + '] bytes: ' + str(struct.unpack('<bhh', msg)))
 
+            elif m[0] == 0x0A:
+                # Set RGB LEDs
+                msg = struct.pack('<bbbbbbbbbbbbb', - ord(chr(m[0])), m[1],m[2],m[3], m[4],m[5],m[6], m[7],m[8],m[9], m[10],m[11],m[12])
+                n = self._send(msg)
+                self._debug('Binary message sent of [' + str(n) + '] bytes: ' + str(struct.unpack('<bbbbbbbbbbbbb', msg)))
+
             else:
                 # Others actuators, parameters are separated by commas
                 msg = ",".join(["%s" % i for i in m])
@@ -316,7 +325,7 @@ class ePuck():
 
     def _read_sensors(self):
         """
-        This method is used for read the ePuck's sensors. Don't use directly,
+        This method is used for read the ePuck2's sensors. Don't use directly,
         instead use 'step()'
         """
 
@@ -392,9 +401,9 @@ class ePuck():
                 if type(reply) is tuple and type(reply[0]) is int:
                     self._light_sensor = reply
 
-            elif s == 'u':
+            elif s == 0x0C:
                 # Microphone
-                parameters = ('u', 6, '@HHH')
+                parameters = (chr(0x0C), 8, '@HHHH')
                 reply = send_binary_mode(parameters)
                 if type(reply) is tuple and type(reply[0]) is int:
                     self._microphone = reply
@@ -409,6 +418,13 @@ class ePuck():
             elif s == 'i':
                 # Do nothing for the camera, is an independent process
                 pass
+
+            elif s == 0x0D:
+                # Distance sensor
+                parameters = (chr(0x0D), 2, '@H')
+                reply = send_binary_mode(parameters)
+                if type(reply) is tuple and type(reply[0]) is int:
+                    self._distance_sensor = reply
 
             else:
                 reply = self.send_and_receive(s).split(",")
@@ -430,7 +446,7 @@ class ePuck():
 
     def connect(self):
         """
-        Connect with the physic ePuck robot
+        Connect with the physic ePuck2 robot
 
         :return: If the connexion was succesful
         :rtype: Boolean
@@ -442,7 +458,7 @@ class ePuck():
             return False
         try:
             self.socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-            self.socket.connect((self.address, 1))
+            self.socket.connect((self.address, 2))
             self.socket.settimeout(0.5)
 
         except Exception, e:
@@ -460,7 +476,7 @@ class ePuck():
 
     def disconnect(self):
         """
-        Disconnect from ePuck robot. Same as 'close()'
+        Disconnect from ePuck2 robot. Same as 'close()'
         """
 
         self.close()
@@ -552,11 +568,11 @@ class ePuck():
                 self._debug('Communication timeout, retrying')
 
 
-    def save_image(self, name='ePuck.jpg'):
+    def save_image(self, name='ePuck2.jpg'):
         """
-        Save image from ePuck's camera to disk
+        Save image from ePuck2's camera to disk
 
-        :param name: Image name, ePuck.jpg as default
+        :param name: Image name, ePuck2.jpg as default
         :type name: String
 
         :return: Operation result
@@ -650,6 +666,15 @@ class ePuck():
         """
         return self._microphone
 
+    def get_distance_sensor(self):
+        """
+        Return the distance in mm
+
+        :return: Distance sensor value
+        :rtype: Tuple
+        """
+        return self._distance_sensor
+
     def is_connected(self):
         """
         Return a boolean value that indicate if the robot is connected to the PC
@@ -661,7 +686,7 @@ class ePuck():
 
     def get_image(self):
         """
-        Return the last image captured from the ePuck's camera (after a 'step()').
+        Return the last image captured from the ePuck2's camera (after a 'step()').
         None if	there are not images captured. The image is an PIL object
 
         :return: Image from robot's camera
@@ -671,7 +696,7 @@ class ePuck():
 
     def get_sercom_version(self):
         """
-        :return: Return the ePuck's firmware version
+        :return: Return the ePuck2's firmware version
         :rtype: String
         """
         return self.send_and_receive("v")
@@ -688,7 +713,7 @@ class ePuck():
 
     def disable(self, *sensors):
         """
-        Sensor(s) that you want to get disable in the ePuck
+        Sensor(s) that you want to get disable in the ePuck2
 
         :param sensors: Name of the sensors, take a look to DIC_SENSORS. Multiple sensors can be separated by commas
         :type sensors: String
@@ -720,7 +745,7 @@ class ePuck():
 
     def enable(self, *sensors):
         """
-        Sensor(s) that you want to get enable in the ePuck
+        Sensor(s) that you want to get enable in the ePuck2
 
         :param sensors: Name of the sensors, take a look to DIC_SENSORS. Multiple sensors can be separated by commas
         :type sensors: String
@@ -781,7 +806,7 @@ class ePuck():
         """
 
         # I don't check the MAX and MIN speed because this check
-        # will be made by the ePuck's firmware. Here we need speed
+        # will be made by the ePuck2's firmware. Here we need speed
         # and we lose time mading recurrent chekings
 
         self._actuators_to_write.append(("D", int(l_motor), int(r_motor)))
@@ -890,7 +915,7 @@ class ePuck():
         """
         Set the camera parameters
 
-        :param mode: GREY_SCALE, LINEAR_CAM, RGB_365, YUM
+        :param mode: GREY_SCALE, LINEAR_CAM, RGB_565, YUM
         :type  mode: String
         :param width: Width of the camera
         :type  width: int
@@ -924,6 +949,18 @@ class ePuck():
             self._debug(self.conexion_status)
 
             return 0
+
+    def set_rgb_leds(self, red2,green2,blue2, red4,green4,blue4, red6,green6,blue6, red8,green8,blue8):
+        """
+        Set RGB LEDs color.
+
+        :param r,g,b: values of red, green and blue for each led (0..100)
+        :type r,g,b: int
+        """
+        self._actuators_to_write.append((0x0A, red2,green2,blue2, red4,green4,blue4, red6,green6,blue6, red8,green8,blue8))
+	
+        return True
+
 
     def calibrate_proximity_sensors(self):
         """
