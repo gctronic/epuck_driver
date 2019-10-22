@@ -8,10 +8,11 @@ from epuck.ePuck2 import ePuck2
 from sensor_msgs.msg import Range
 from sensor_msgs.msg import Imu
 from sensor_msgs.msg import Image
-from sensor_msgs.msg import ChannelFloat32
+from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Point, Quaternion
 from nav_msgs.msg import Odometry
+from std_msgs.msg import UInt8MultiArray
 from visualization_msgs.msg import Marker
 import math
 import tf
@@ -34,9 +35,14 @@ WHEEL_DISTANCE = 0.053
 WHEEL_CIRCUMFERENCE = ((WHEEL_DIAMETER*math.pi)/100.0)
 # Distance for each motor step (meters); a complete turn is 1000 steps.
 MOT_STEP_DIST = (WHEEL_CIRCUMFERENCE/1000.0)    # 0.000125 meters per step (m/steps)
+ROBOT_RADIUS = 0.035 # meters.
+
+STANDARD_GRAVITY = 9.80665
+GYRO_RAW2DPS = (250.0/32768.0) # 250DPS (degrees per second) scale for int16 raw value
+GYRO_RAW2RAD = GYRO_RAW2DPS * math.pi / 180.0 
 
 # available sensors
-sensors = ['accelerometer', 'proximity', 'motor_position', 'light',
+sensors = ['imu', 'proximity', 'motor_position', 'light',
            'floor', 'camera', 'selector', 'motor_speed', 'microphone', 'distance_sensor']
 
 
@@ -125,8 +131,11 @@ class EPuck2Driver(object):
         # Subscribe to Command Velocity Topic
         rospy.Subscriber("mobile_base/cmd_vel", Twist, self.handler_velocity)
 
-		# Subscribe to RGB topic
-        rospy.Subscriber("rgb_values", ChannelFloat32, self.handler_rgb)
+        # Subscribe to RGB topic
+        rospy.Subscriber("mobile_base/rgb_leds", UInt8MultiArray, self.handler_rgb)
+
+        # Subscribe to LEDs topic
+        rospy.Subscriber("mobile_base/cmd_led", UInt8MultiArray, self.handler_leds)
 
         # Sensor Publishers
         # rospy.Publisher("/%s/mobile_base/" % self._name, )
@@ -143,12 +152,13 @@ class EPuck2Driver(object):
                 self.prox_msg[i].field_of_view = 0.26 	# About 15 degrees...to be checked!
                 self.prox_msg[i].min_range = 0.005	# 0.5 cm
                 self.prox_msg[i].max_range = 0.05		# 5 cm
+            self.laser_publisher = rospy.Publisher("scan", LaserScan, queue_size=1)
 
         if self.enabled_sensors['motor_position']:
             self.odom_publisher = rospy.Publisher('odom', Odometry, queue_size=1)
 
-        if self.enabled_sensors['accelerometer']:
-            self.accel_publisher = rospy.Publisher('accel', Imu, queue_size=1)    # Only "linear_acceleration" vector filled.
+        if self.enabled_sensors['imu']:
+            self.imu_publisher = rospy.Publisher('imu', Imu, queue_size=1)
 
         if self.enabled_sensors['selector']:
             self.selector_publisher = rospy.Publisher('selector', Marker, queue_size=1)
@@ -184,7 +194,6 @@ class EPuck2Driver(object):
                             # We communicate as fast as possible, this shouldn't be a problem...
 
     def update_sensors(self):
-        # print "accelerometer:", self._bridge.get_accelerometer()
         # print "proximity:", self._bridge.get_proximity()
         # print "light:", self._bridge.get_light_sensor()
         # print "motor_position:", self._bridge.get_motor_position()
@@ -237,26 +246,94 @@ class EPuck2Driver(object):
             self.br.sendTransform((0.025, 0.025, 0.034), tf.transformations.quaternion_from_euler(0, 0, 0.70), rospy.Time.now(), self._name+"/base_prox6", self._name+"/base_link")
             self.br.sendTransform((0.035, 0.010, 0.034), tf.transformations.quaternion_from_euler(0, 0, 0.17), rospy.Time.now(), self._name+"/base_prox7", self._name+"/base_link")
 
+            laser_msg = LaserScan()
+            laser_msg.header.stamp = rospy.Time.now()
+            laser_msg.header.frame_id = self._name+"/base_laser"
+            laser_msg.angle_min = -math.pi/2.0
+            laser_msg.angle_max = math.pi/2.0
+            laser_msg.angle_increment = math.pi/18.0 # 10 degrees.
+            laser_msg.range_min = 0.005 + ROBOT_RADIUS # 0.5 cm + ROBOT_RADIUS.
+            laser_msg.range_max = 0.05 + ROBOT_RADIUS # 5 cm + ROBOT_RADIUS. 
+            laser_msg.ranges = [None] * 19
+            laser_msg.intensities = [None] * 19
 
-        if self.enabled_sensors['accelerometer']:
+            # We use the information from the 6 proximity sensors on the front side of the robot to get 19 laser scan points. The interpolation used is the following:
+            # -90 degrees: P2
+            # -80 degrees: 4/5*P2 + 1/5*P1
+            # -70 degrees: 3/5*P2 + 2/5*P1
+            # -60 degrees: 2/5*P2 + 3/5*P1
+            # -50 degrees: 1/5*P2 + 4/5*P1
+            # -40 degrees: P1
+            # -30 degrees: 2/3*P1 + 1/3*P0
+            # -20 degrees: 1/3*P1 + 2/3*P0
+            # -10 degrees: P0
+            # 0 degrees: 1/2*P0 + 1/2*P7
+            # 10 degrees: P7
+            # 20 degrees: 1/3*P6 + 2/3*P7
+            # 30 degrees: 2/3*P6 + 1/3*P7
+            # 40 degrees: P6
+            # 50 degrees: 1/5*P5 + 4/5*P6
+            # 60 degrees: 2/5*P5 + 3/5*P6
+            # 70 degrees: 3/5*P5 + 2/5*P6
+            # 80 degrees: 4/5*P5 + 1/5*P6
+            # 90 degrees: P5
+        
+            tempProx = [None] * 19
+            tempProx[0] = prox_sensors[2]
+            tempProx[1] = prox_sensors[2]*4/5 + prox_sensors[1]*1/5
+            tempProx[2] = prox_sensors[2]*3/5 + prox_sensors[1]*2/5
+            tempProx[3] = prox_sensors[2]*2/5 + prox_sensors[1]*3/5
+            tempProx[4] = prox_sensors[2]*1/5 + prox_sensors[1]*4/5
+            tempProx[5] = prox_sensors[1]
+            tempProx[6] = prox_sensors[1]*2/3 + prox_sensors[0]*1/3
+            tempProx[7] = prox_sensors[1]*1/3 + prox_sensors[0]*2/3
+            tempProx[8] = prox_sensors[0]
+            tempProx[9] = (prox_sensors[0]+prox_sensors[7])>>1
+            tempProx[10] = prox_sensors[7]
+            tempProx[11] = prox_sensors[7]*2/3 + prox_sensors[6]*1/3
+            tempProx[12] = prox_sensors[7]*1/3 + prox_sensors[6]*2/3
+            tempProx[13] = prox_sensors[6];
+            tempProx[14] = prox_sensors[6]*4/5 + prox_sensors[5]*1/5;
+            tempProx[15] = prox_sensors[6]*3/5 + prox_sensors[5]*2/5;
+            tempProx[16] = prox_sensors[6]*2/5 + prox_sensors[5]*3/5;
+            tempProx[17] = prox_sensors[6]*1/5 + prox_sensors[5]*4/5;
+            tempProx[18] = prox_sensors[5]
+
+            for i in range(0,19):
+                if(tempProx[i] > 0):
+                    laser_msg.ranges[i] = (0.5/math.sqrt(tempProx[i])) + ROBOT_RADIUS # Transform the analog value to a distance value in meters (given from field tests).
+                    laser_msg.intensities[i] = tempProx[i]
+                else: # Sometimes the values could be negative due to the calibration, it means there is no obstacles.
+                    laser_msg.ranges[i] = laser_msg.range_max
+                    laser_msg.intensities[i] = 0
+                if(laser_msg.ranges[i] > laser_msg.range_max):
+                    laser_msg.ranges[i] = laser_msg.range_max
+                if(laser_msg.ranges[i] < laser_msg.range_min):   
+                    laser_msg.ranges[i] = laser_msg.range_min
+
+            self.laser_publisher.publish(laser_msg)
+            self.br.sendTransform((0.0, 0.0, 0.034), tf.transformations.quaternion_from_euler(0, 0, 0), rospy.Time.now(), self._name+"/base_laser", self._name+"/base_link")
+
+        if self.enabled_sensors['imu']:
             accel = self._bridge.get_accelerometer()
-            accel_msg = Imu()
-            accel_msg.header.stamp = rospy.Time.now()
-            accel_msg.header.frame_id = self._name+"/base_link"
-            accel_msg.linear_acceleration.x = (accel[1]-2048.0)/800.0*9.81 # 1 g = about 800, then transforms in m/s^2.
-            accel_msg.linear_acceleration.y = (accel[0]-2048.0)/800.0*9.81
-            accel_msg.linear_acceleration.z = (accel[2]-2048.0)/800.0*9.81
-            accel_msg.linear_acceleration_covariance = [0.01,0.0,0.0, 0.0,0.01,0.0, 0.0,0.0,0.01]
+            imu_msg = Imu()
+            imu_msg.header.stamp = rospy.Time.now()
+            imu_msg.header.frame_id = self._name+"/base_link"
+            imu_msg.linear_acceleration.x = (accel[1]-2048.0)/800.0*9.81 # 1 g = about 800, then transforms in m/s^2.
+            imu_msg.linear_acceleration.y = (accel[0]-2048.0)/800.0*9.81
+            imu_msg.linear_acceleration.z = (accel[2]-2048.0)/800.0*9.81
+            imu_msg.linear_acceleration_covariance = [0.01,0.0,0.0, 0.0,0.01,0.0, 0.0,0.0,0.01]
             #print "accel raw: " + str(accel[0]) + ", " + str(accel[1]) + ", " + str(accel[2])
             #print "accel (m/s2): " + str((accel[0]-2048.0)/800.0*9.81) + ", " + str((accel[1]-2048.0)/800.0*9.81) + ", " + str((accel[2]-2048.0)/800.0*9.81)
-            accel_msg.angular_velocity.x = 0
-            accel_msg.angular_velocity.y = 0
-            accel_msg.angular_velocity.z = 0
-            accel_msg.angular_velocity_covariance = [0.01,0.0,0.0, 0.0,0.01,0.0, 0.0,0.0,0.01]
+            gyro = self._bridge.get_gyro()
+            imu_msg.angular_velocity.x = gyro[0]*GYRO_RAW2RAD # rad/s
+            imu_msg.angular_velocity.y = gyro[1]*GYRO_RAW2RAD
+            imu_msg.angular_velocity.z = gyro[2]*GYRO_RAW2RAD
+            imu_msg.angular_velocity_covariance = [0.01,0.0,0.0, 0.0,0.01,0.0, 0.0,0.0,0.01]
             q = tf.transformations.quaternion_from_euler(0, 0, 0)
-            accel_msg.orientation = Quaternion(*q)
-            accel_msg.orientation_covariance = [0.01,0.0,0.0, 0.0,0.01,0.0, 0.0,0.0,0.01]
-            self.accel_publisher.publish(accel_msg)
+            imu_msg.orientation = Quaternion(*q)
+            imu_msg.orientation_covariance = [0.01,0.0,0.0, 0.0,0.01,0.0, 0.0,0.0,0.01]
+            self.imu_publisher.publish(imu_msg)
 
         if self.enabled_sensors['motor_position']:
             motor_pos = list(self._bridge.get_motor_position()) # Get a list since tuple elements returned by the function are immutable.
@@ -436,8 +513,19 @@ class EPuck2Driver(object):
         :param data: r,g,b values for each LEDs in sequence
         """
         #print(data)
-        self._bridge.set_rgb_leds(data.values[0],data.values[1],data.values[2], data.values[3],data.values[4],data.values[5], data.values[6],data.values[7],data.values[8], data.values[9],data.values[10],data.values[11])
+        self._bridge.set_rgb_leds(ord(data.data[0]),ord(data.data[1]),ord(data.data[2]), ord(data.data[3]),ord(data.data[4]),ord(data.data[5]), ord(data.data[6]),ord(data.data[7]),ord(data.data[8]), ord(data.data[9]),ord(data.data[10]),ord(data.data[11]))
 
+    def handler_leds(self, data):
+        """
+        Controls the leds: led0, led2, led4, led6, body led, front led.
+        :param data:
+        """
+        self._bridge.set_led(0, ord(data.data[0]))
+        self._bridge.set_led(2, ord(data.data[1]))
+        self._bridge.set_led(4, ord(data.data[2]))
+        self._bridge.set_led(6, ord(data.data[3]))
+        self._bridge.set_body_led(ord(data.data[4]))
+        self._bridge.set_front_led(ord(data.data[5]))
 
 def run():
     rospy.init_node("epuck2_drive", anonymous=True)

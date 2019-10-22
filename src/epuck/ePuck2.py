@@ -82,7 +82,7 @@ DIC_MSG = {
 # You have to use the keys of this dictionary for indicate on "enable" function
 # the sensor that you want to read
 DIC_SENSORS = {
-    "accelerometer": "a",
+    "imu": "ag",
     "selector": "c",
     "motor_speed": "e",
     "camera": "i",
@@ -91,7 +91,8 @@ DIC_SENSORS = {
     "light": "o",
     "motor_position": "q",
     "microphone": 0x0C, #"u",
-    "distance_sensor": 0x0D
+    "distance_sensor": 0x0D,
+    "gyro": "g"
 }
 
 # You have to use the keys of this dictionary for indicate the operating
@@ -159,11 +160,12 @@ class ePuck2():
         self._light_sensor = (0, 0, 0, 0, 0, 0, 0, 0)
         self._microphone = (0, 0, 0, 0)
         self._pil_image = None
-	self._distance_sensor = (0)
+        self._distance_sensor = (0)
+        self._gyro = (0, 0, 0)
 
         # Leds
         self._leds_status = [False] * 10
-	self._rgb_leds = (0,0,0, 0,0,0, 0,0,0, 0,0,0)
+        self._rgb_leds = (0,0,0, 0,0,0, 0,0,0, 0,0,0)
 
     #
     # Private methods
@@ -361,7 +363,7 @@ class ePuck2():
         # Read differents sensors
         for s in self._sensors_to_read:
 
-            if s == 'a':
+            if s == 'ag':
                 # Accelerometer sensor in a non filtered way
                 if self._accelerometer_filtered:
                     parameters = ('A', 12, '@III')
@@ -372,6 +374,11 @@ class ePuck2():
                 reply = send_binary_mode(parameters)
                 if type(reply) is tuple and type(reply[0]) is int:
                     self._accelerometer = reply
+
+                parameters = ('g', 6, '@hhh')
+                reply = send_binary_mode(parameters)
+                if type(reply) is tuple and type(reply[0]) is int:
+                    self._gyro = reply
 
             elif s == 'n':
                 # Proximity sensors
@@ -425,6 +432,13 @@ class ePuck2():
                 reply = send_binary_mode(parameters)
                 if type(reply) is tuple and type(reply[0]) is int:
                     self._distance_sensor = reply
+
+            elif s == 'g':
+                # Gyro
+                parameters = ('g', 6, '@HHH')
+                reply = send_binary_mode(parameters)
+                if type(reply) is tuple and type(reply[0]) is int:
+                    self._gyro = reply
 
             else:
                 reply = self.send_and_receive(s).split(",")
@@ -693,6 +707,15 @@ class ePuck2():
         :rtype: PIL
         """
         return self._pil_image
+
+    def get_gyro(self):
+        """
+        Return gyro values
+
+        :return: Gyro values
+        :rtype: Tuple
+        """
+        return self._gyro
 
     def get_sercom_version(self):
         """
